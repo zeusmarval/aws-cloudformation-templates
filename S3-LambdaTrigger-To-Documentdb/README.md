@@ -1,0 +1,1 @@
+# S3 Lambda Trigger to Documentdb

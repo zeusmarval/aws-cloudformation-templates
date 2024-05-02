@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Stack de creacion de escenario s3 hacia documentdb.
+
+Parameters:
+
+  lambdaName:
+    Type: String
+  bucketName:
+    Type: String
+  globalHundleFile:
+    Type: String
+    # Default: global-bundle.pem
+  globalHundleUrl:
+    Type: String
+    # Default: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+  layerPymongo:
+    Type: String
+  secretManagerArn:
+    Type: String
+  securityGroupIds:
+    Type: String
+  subnetIDs:
+    Type: String
+  nameDatabase:
+    Type: String
+  collectionDatabase:
+    Type: String
+  databasePreference:
+    Type: String
+
+Resources:
+
+  iamTemplate:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./infrastructure/iam.yml
+      Parameters:
+        secretManagerArn: !Ref secretManagerArn
+        bucketName: !Ref bucketName
+
+  lambdaTemplate:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ./infrastructure/lambdaBucket.yml
+      Parameters:
+        lambdaName: !Ref lambdaName
+        bucketName: !Ref bucketName
+        secretManagerArn: !Ref secretManagerArn
+        region: !Ref AWS::Region
+        globalHundleFile: !Ref globalHundleFile
+        globalHundleUrl: !Ref globalHundleUrl
+        nameDatabase: !Ref nameDatabase
+        collectionDatabase: !Ref collectionDatabase
+        databasePreference: !Ref databasePreference
+        layerPymongo: !Ref layerPymongo
+        securityGroupIds: !Ref securityGroupIds
+        subnetIDs: !Ref subnetIDs
+        lambdaRoleArn: !GetAtt iamTemplate.Outputs.arnLambdaRole
+    DependsOn:
+      - iamTemplate
+
+Outputs:
+
+  userAccessKey:
+    Description: Access Key para usuario de consola.
+    Value: !GetAtt iamTemplate.Outputs.userAccessKey
+  
+  userSecretKey:
+    Description: Clave de acceso secreta para usuario de consola.
+    Value: !GetAtt iamTemplate.Outputs.userSecretKey
+
+  arnRoleLambdaForS3:
+    Description: Arn del rol para lambda.
+    Value: !GetAtt iamTemplate.Outputs.arnLambdaRole
+  
+  arnLambda:
+    Description: Arn del funcion lambda.
+    Value: !GetAtt lambdaTemplate.Outputs.arnLambda
+  
+  bucketS3:
+    Description: nombre del Bucket S3.
+    Value: !GetAtt lambdaTemplate.Outputs.bucketS3

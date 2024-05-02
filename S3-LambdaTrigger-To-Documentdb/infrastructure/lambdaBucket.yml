@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Stack de creacion de lambda con invocacion desde S3 para insertar en Documentdb.
+
+Parameters:
+
+  lambdaName:
+    Type: String
+  region:
+    Type: String
+  bucketName:
+    Type: String
+  globalHundleFile:
+    Type: String
+  globalHundleUrl:
+    Type: String
+  lambdaRoleArn:
+    Type: String
+  layerPymongo:
+    Type: String
+  secretManagerArn:
+    Type: String
+  securityGroupIds:
+    Type: String
+  subnetIDs:
+    Type: String
+  nameDatabase:
+    Type: String
+  collectionDatabase:
+    Type: String
+  databasePreference:
+    Type: String
+
+Globals:
+  Function:
+    MemorySize: 128
+    Runtime: python3.12
+    Timeout: 5
+    Handler: lambda_function.lambda_handler
+    EphemeralStorage:
+      Size: 512
+    Architectures:
+      - "x86_64"
+    VpcConfig:
+      SubnetIds: !Split [",", !Ref subnetIDs]
+      SecurityGroupIds:
+        - !Ref securityGroupIds
+
+Resources:
+  lambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src/lambda/
+      Description: ''
+      FunctionName: !Ref lambdaName
+      Role: !Ref lambdaRoleArn
+      Environment:
+        Variables:
+          bucketName: !Ref bucketName
+          secretManagerArn: !Ref secretManagerArn
+          region: !Ref region
+          globalHundleFile: !Ref globalHundleFile
+          globalHundleUrl: !Ref globalHundleUrl
+          nameDatabase: !Ref nameDatabase
+          collectionDatabase: !Ref collectionDatabase
+          databasePreference: !Ref databasePreference
+      Layers:
+        - !Ref layerPymongo
+      Events:
+        BucketEvent:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: bucketS3
+            Events:
+              - s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: ate-
+                  - Name: suffix
+                    Value: .json
+  
+  bucketS3:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref bucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+Outputs:
+  bucketS3:
+    Description: nombre del Bucket S3.
+    Value: !Ref bucketS3
+  arnLambda:
+    Description: Arn de la funcion lambda.
+    Value: !Ref lambda

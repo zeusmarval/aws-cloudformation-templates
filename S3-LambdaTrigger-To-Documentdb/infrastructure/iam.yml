@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Stack para creacion de rol lambda y usuario programatico para s3.
+
+Parameters:
+  bucketName:
+    Type: String
+  secretManagerArn:
+    Type: String
+  
+Resources:
+  userForS3:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-user-for-s3'
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-user-s3-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${bucketName}'
+                  - !Sub 'arn:aws:s3:::${bucketName}/*'
+
+  userCredentials:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      Status: Active
+      UserName: !Ref userForS3
+
+  lambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lambda-role'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Principal:
+              Service: lambda.amazonaws.com
+      
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-secret-manager-policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetRandomPassword
+                  - secretsmanager:GetResourcePolicy
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:ListSecretVersionIds
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref secretManagerArn
+      
+        - PolicyName: !Sub '${AWS::StackName}-s3-policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: 
+                  - !Sub 'arn:aws:s3:::${bucketName}'
+                  - !Sub 'arn:aws:s3:::${bucketName}/*'
+
+Outputs:
+  userAccessKey:
+    Description: Access Key para usuario de consola.
+    Value: !Ref userCredentials
+  
+  userSecretKey:
+    Description: Clave de acceso secreta para usuario de consola.
+    Value: !GetAtt userCredentials.SecretAccessKey
+
+  arnLambdaRole:
+    Description: Role lambda.
+    Value: !GetAtt lambdaRole.Arn

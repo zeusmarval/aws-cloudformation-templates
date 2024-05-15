@@ -45,7 +45,7 @@ Resources:
   secretManagerJWT:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: project/qa
+      Name: project/jwt/qa
       Description: Secret for JWT validation.
       GenerateSecretString:
         SecretStringTemplate: '{"secretkey": "", "username": "--username--", "password": "--password--"}'

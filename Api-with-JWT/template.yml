@@ -1,0 +1,257 @@
+# Se debe crear manualmente el nombre de usuario y contraseña del SecretManager
+# Se debe crear un nombre para el secretManager
+# Se debe agregar el secretManager de la base de datos Documentdb
+# Se debe agregregar datos para el vpc
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Stack de creacion de API Gateway con JWT para documentdb.
+
+Parameters:
+  secretManagerDocumentArn:
+    Type: String
+    # Default: ARN
+  securityGroupIds:
+    Type: String
+    # Default: sg-00000
+  subnetIDs:
+    Type: String
+    # Default: subnet-1,subnet-2
+  Environment: 
+    Description : "Environment stack identification, allowed values are: dev, qa, prod"
+    Type: "String"
+    Default: "dev"
+    AllowedValues:
+      - dev
+      - qa
+      - prod
+
+Globals:
+  Function:
+    MemorySize: 128
+    Runtime: python3.12
+    Timeout: 5
+    Handler: lambda_function.lambda_handler
+    EphemeralStorage:
+      Size: 512
+    Architectures:
+      - "x86_64"
+    VpcConfig:
+      SubnetIds: !Split [",", !Ref subnetIDs]
+      SecurityGroupIds:
+        - !Ref securityGroupIds
+
+Resources:
+
+  secretManagerJWT:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: project/qa
+      Description: Secret for JWT validation.
+      GenerateSecretString:
+        SecretStringTemplate: '{"secretkey": "", "username": "--username--", "password": "--password--"}'
+        GenerateStringKey: secretkey
+
+  lambdaInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-lambdaInvoke-Policy'
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  lambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-LambdaExecution-Policy'
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - secretsmanager:GetSecretValue
+                Resource: 
+                  - !Ref secretManagerJWT
+                  - !Ref secretManagerDocumentArn
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource: arn:aws:execute-api:*:*:*
+  
+  authorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # FunctionName:
+      Role: !GetAtt lambdaExecutionRole.Arn
+      CodeUri: ./src/authorizerFunction/
+      Environment:
+        Variables:
+          secretManagerArn: !Ref secretManagerJWT
+  
+  createTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # FunctionName:
+      Role: !GetAtt lambdaExecutionRole.Arn
+      CodeUri: ./src/createTokenFunction/
+      Environment:
+        Variables:
+          secretManagerArn: !Ref secretManagerJWT
+          days: 7
+
+  insertRawDataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # FunctionName: 
+      CodeUri: ./src/insertRawDataFunction/
+      Role: !GetAtt lambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          secretManagerArn: !Ref secretManagerDocumentArn
+          nameDatabase: database
+          collectionDatabase: rawData
+          globalHundleUrl: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+          globalHundleFile: global-bundle.pem
+          databasePreference: "?tls=true&tlsCAFile=/tmp/global-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"
+
+  restApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: api-name
+      Description: API con autenticacion JWT
+      ApiKeySourceType: HEADER
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  resourceV1:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref restApi
+      ParentId: !GetAtt restApi.RootResourceId
+      PathPart: v1
+
+  loadResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref restApi
+      PathPart: load
+      ParentId: !Ref resourceV1
+  
+  tokenResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref restApi
+      PathPart: token
+      ParentId: !Ref resourceV1
+
+  authorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: JwtAuthorizer
+      Type: TOKEN
+      RestApiId: !Ref restApi
+      IdentitySource: method.request.header.Authorization
+      AuthorizerUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${authorizerFunction.Arn}/invocations"
+      AuthorizerCredentials: !GetAtt lambdaInvokeRole.Arn
+
+  method2:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      MethodResponses:
+        - ResponseModels:
+            "application/json": "Empty"
+          StatusCode: "200"
+        - ResponseModels:
+            "application/json": "Empty"
+          StatusCode: "400"
+      HttpMethod: POST
+      ResourceId: !Ref tokenResource
+      RestApiId: !Ref restApi
+      Integration:
+        ContentHandling: CONVERT_TO_TEXT
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${createTokenFunction.Arn}/invocations"
+
+  method:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref authorizer
+      ApiKeyRequired: false
+      MethodResponses:
+        - ResponseModels:
+            "application/json": "Empty"
+          StatusCode: "200"
+      HttpMethod: POST
+      ResourceId: !Ref loadResource
+      RestApiId: !Ref restApi
+      Integration:
+        ContentHandling: CONVERT_TO_TEXT
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${insertRawDataFunction.Arn}/invocations"
+
+  deploymentStage:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref restApi
+      Description: api deployment
+      StageName: integration
+    DependsOn:
+        - restApi
+        - method
+        - method2
+        - authorizer
+        - resourceV1
+        - loadResource
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref insertRawDataFunction
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${restApi.RestApiId}/*/POST/v1/load"
+  
+  LambdaPermission2:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref createTokenFunction
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${restApi.RestApiId}/*/POST/v1/token"
+
+Outputs:
+
+  insertEndpoint:
+    Description: Endpoint para insertar en Documentdb.
+    Value: !Sub "https://${restApi}.execute-api.${AWS::Region}.amazonaws.com/integration/v1/load"
+
+  tokenEndpoint:
+    Description: Endpoint para crear token jwt.
+    Value: !Sub "https://${restApi}.execute-api.${AWS::Region}.amazonaws.com/integration/v1/token"
